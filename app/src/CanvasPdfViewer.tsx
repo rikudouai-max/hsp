@@ -1,20 +1,20 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 
-// Point to local worker copied into public/
+// Point to local worker bundled in public/
 pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.js';
 
 interface CanvasPdfViewerProps {
   data?: Uint8Array;
   blobUrl?: string;
-  fileName: string;
+  fileName?: string;
 }
 
 export const CanvasPdfViewer: React.FC<CanvasPdfViewerProps> = ({ data, blobUrl }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [numPages, setNumPages] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const [scale, setScale] = useState<number>(1.2);
+  const [scale, setScale] = useState<number>(1.3);
   const [loading, setLoading] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const pdfDocRef = useRef<any>(null);
@@ -28,21 +28,30 @@ export const CanvasPdfViewer: React.FC<CanvasPdfViewerProps> = ({ data, blobUrl 
 
     const loadDoc = async () => {
       try {
-        console.log('[Viewer] Loading PDF document into memory viewer...');
+        console.log('[Viewer] Loading PDF with bundled CMaps & standard font packages...');
+        
+        // Use relative path to public/cmaps/ and public/standard_fonts/
+        const cMapUrl = './cmaps/';
+        const standardFontDataUrl = './standard_fonts/';
+
         let loadingTask;
         if (data && data.byteLength > 0) {
-          console.log(`[Viewer] Using raw Uint8Array: ${data.byteLength} bytes`);
+          console.log(`[Viewer] Loading Uint8Array buffer (${data.byteLength} bytes) with full font assets`);
           loadingTask = pdfjsLib.getDocument({
             data: data.slice(),
-            cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
+            cMapUrl: cMapUrl,
             cMapPacked: true,
+            standardFontDataUrl: standardFontDataUrl,
+            enableXfa: true,
           });
         } else if (blobUrl) {
-          console.log(`[Viewer] Using blobUrl: ${blobUrl}`);
+          console.log(`[Viewer] Loading blobUrl (${blobUrl}) with full font assets`);
           loadingTask = pdfjsLib.getDocument({
             url: blobUrl,
-            cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
+            cMapUrl: cMapUrl,
             cMapPacked: true,
+            standardFontDataUrl: standardFontDataUrl,
+            enableXfa: true,
           });
         } else {
           throw new Error('لا توجد بيانات ثنائية للملف');
@@ -51,7 +60,7 @@ export const CanvasPdfViewer: React.FC<CanvasPdfViewerProps> = ({ data, blobUrl 
         const doc = await loadingTask.promise;
         if (isCancelled) return;
 
-        console.log(`[Viewer] PDF parsed successfully! Pages: ${doc.numPages}`);
+        console.log(`[Viewer] PDF parsed successfully! Total pages: ${doc.numPages}`);
         pdfDocRef.current = doc;
         setNumPages(doc.numPages);
         setCurrentPage(1);
@@ -59,7 +68,7 @@ export const CanvasPdfViewer: React.FC<CanvasPdfViewerProps> = ({ data, blobUrl 
       } catch (err: any) {
         console.error('[Viewer] PDF.js getDocument error:', err);
         if (!isCancelled) {
-          setErrorMsg(err.message || 'تعذر تحليل ملف الـ PDF. قد يكون الملف تالفاً أو غير مكتمل.');
+          setErrorMsg(err.message || 'تعذر تحليل ملف الـ PDF أو تحميل الخطوط القياسية.');
           setLoading(false);
         }
       }
@@ -72,7 +81,7 @@ export const CanvasPdfViewer: React.FC<CanvasPdfViewerProps> = ({ data, blobUrl 
     };
   }, [data, blobUrl]);
 
-  // Render current page to canvas
+  // Render current page to canvas with high fidelity & proper pixel ratio
   useEffect(() => {
     if (!pdfDocRef.current || currentPage < 1) return;
 
@@ -90,16 +99,25 @@ export const CanvasPdfViewer: React.FC<CanvasPdfViewerProps> = ({ data, blobUrl 
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        const context = canvas.getContext('2d');
+        const context = canvas.getContext('2d', { alpha: false });
         if (!context) return;
 
-        const viewport = page.getViewport({ scale });
+        // Native screen scale for crisp text rendering of Arabic ligatures and French accents
+        const pixelRatio = window.devicePixelRatio || 1;
+        const viewport = page.getViewport({ scale: scale * pixelRatio });
+
+        // Set buffer size for crisp font glyphs
         canvas.height = viewport.height;
         canvas.width = viewport.width;
+
+        // Set visual display size
+        canvas.style.width = `${viewport.width / pixelRatio}px`;
+        canvas.style.height = `${viewport.height / pixelRatio}px`;
 
         const renderContext = {
           canvasContext: context,
           viewport: viewport,
+          intent: 'display',
         };
 
         const task = page.render(renderContext);
@@ -166,7 +184,7 @@ export const CanvasPdfViewer: React.FC<CanvasPdfViewerProps> = ({ data, blobUrl 
           <button
             className="btn btn-outline"
             style={{ padding: '4px 8px' }}
-            onClick={() => setScale(s => Math.min(2.5, s + 0.2))}
+            onClick={() => setScale(s => Math.min(3.0, s + 0.2))}
           >
             🔍 +
           </button>
@@ -189,7 +207,7 @@ export const CanvasPdfViewer: React.FC<CanvasPdfViewerProps> = ({ data, blobUrl 
         {loading && (
           <div style={{ textAlign: 'center', marginTop: '40px', color: '#94a3b8' }}>
             <div style={{ fontSize: '2rem', marginBottom: 8 }}>⏳</div>
-            <p>جاري فك التشفير وعرض المستند من الذاكرة...</p>
+            <p>جاري فك التشفير وعرض المستند بالخطوط الأصلية...</p>
           </div>
         )}
 
