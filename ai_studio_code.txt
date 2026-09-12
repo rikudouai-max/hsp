@@ -1,0 +1,1040 @@
+/*
+====================================================================================
+  تطبيق: "مختص في حفظ الصحة" (Mokhtas Hifd Saha) - Android Jetpack Compose
+  Single-file Ready for Google AI Studio (Build Mode) / Android Studio
+====================================================================================
+
+تعليمات الاستخدام في Google AI Studio (Build mode) أو مشروع Android Studio:
+------------------------------------------------------------------------------------
+1. قم بإنشاء مشروع Android جديد يدعم Jetpack Compose (Empty Activity).
+2. في ملف `app/build.gradle.kts` تأكد من وجود الاعتماديات التالية:
+   - implementation("androidx.core:core-ktx:1.12.0")
+   - implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+   - implementation("androidx.activity:activity-compose:1.8.2")
+   - implementation(platform("androidx.compose:compose-bom:2024.02.00"))
+   - implementation("androidx.compose.ui:ui")
+   - implementation("androidx.compose.ui:ui-graphics")
+   - implementation("androidx.compose.ui:ui-tooling-preview")
+   - implementation("androidx.compose.material3:material3")
+   - implementation("androidx.compose.material:material-icons-extended")
+3. في ملف `AndroidManifest.xml`:
+   - أضف صلاحية الإنترنت: <uses-permission android:name="android.permission.INTERNET" />
+4. الصق كامل الكود الموجود في هذا الملف داخل `MainActivity.kt` (أو بيئة Google AI Studio Build).
+5. اضغط على Run أو Build APK لإنشاء تطبيق أندرويد المستقل والمحمي تماماً.
+====================================================================================
+*/
+
+package com.hsp.hygieneapp
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.pdf.PdfRenderer
+import android.os.Bundle
+import android.os.ParcelFileDescriptor
+import android.view.WindowManager
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.compose.animation.*
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+
+// ==========================================
+// 1. Data Models
+// ==========================================
+data class LessonItem(
+    val id: String,
+    val title: String,
+    val chapter: String,
+    val driveId: String
+)
+
+data class StudyModule(
+    val id: String,
+    val name: String,
+    val lessons: List<LessonItem>
+)
+
+data class Semester(
+    val id: String,
+    val name: String,
+    val modules: List<StudyModule>
+)
+
+// Navigation state sealed hierarchy
+sealed class Screen {
+    object SemesterList : Screen()
+    data class ModuleList(val semester: Semester) : Screen()
+    data class LessonList(val semester: Semester, val module: StudyModule) : Screen()
+    data class PdfView(val lesson: LessonItem, val file: File) : Screen()
+}
+
+// ==========================================
+// 2. Real Catalog Data (Extracted from Project)
+// ==========================================
+${catalogKt}
+
+// ==========================================
+// 3. Main Activity with Anti-Screenshot DRM
+// ==========================================
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        // Disable screenshots and screen recordings for content protection (DRM)
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_SECURE,
+            WindowManager.LayoutParams.FLAG_SECURE
+        )
+
+        setContent {
+            HygieneAppTheme {
+                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        MainAppContent()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// 4. Material 3 Theme Configuration
+// ==========================================
+@Composable
+fun HygieneAppTheme(content: @Composable () -> Unit) {
+    val primaryColor = Color(0xFF0D9488)      // Teal 600
+    val primaryDark = Color(0xFF0F766E)       // Teal 700
+    val secondaryColor = Color(0xFF0284C7)    // Sky 600
+    val backgroundColor = Color(0xFFF8FAFC)   // Slate 50
+    val surfaceColor = Color(0xFFFFFFFF)
+    val textPrimary = Color(0xFF0F172A)       // Slate 900
+    val textSecondary = Color(0xFF64748B)     // Slate 500
+
+    val colorScheme = lightColorScheme(
+        primary = primaryColor,
+        onPrimary = Color.White,
+        primaryContainer = Color(0xFFCCFBF1),
+        onPrimaryContainer = Color(0xFF115E59),
+        secondary = secondaryColor,
+        onSecondary = Color.White,
+        background = backgroundColor,
+        onBackground = textPrimary,
+        surface = surfaceColor,
+        onSurface = textPrimary,
+        surfaceVariant = Color(0xFFF1F5F9),
+        onSurfaceVariant = textSecondary
+    )
+
+    MaterialTheme(
+        colorScheme = colorScheme,
+        content = content
+    )
+}
+
+// ==========================================
+// 5. App Shell & Navigation
+// ==========================================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MainAppContent() {
+    var currentScreen by remember { mutableStateOf<Screen>(Screen.SemesterList) }
+    var searchQuery by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    // Handle back button smoothly
+    BackHandler(enabled = currentScreen !is Screen.SemesterList) {
+        currentScreen = when (val screen = currentScreen) {
+            is Screen.PdfView -> {
+                val sem = catalogData.firstOrNull { s -> s.modules.any { m -> m.lessons.any { l -> l.id == screen.lesson.id } } }
+                val mod = sem?.modules?.firstOrNull { m -> m.lessons.any { l -> l.id == screen.lesson.id } }
+                if (sem != null && mod != null) Screen.LessonList(sem, mod) else Screen.SemesterList
+            }
+            is Screen.LessonList -> Screen.ModuleList(screen.semester)
+            is Screen.ModuleList -> Screen.SemesterList
+            Screen.SemesterList -> Screen.SemesterList
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(
+                            text = "مختص في حفظ الصحة",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        val subtitle = when (val s = currentScreen) {
+                            Screen.SemesterList -> "الدليل الدراسي والملفات الرسمية"
+                            is Screen.ModuleList -> s.semester.name
+                            is Screen.LessonList -> "${s.semester.name} - ${s.module.name}"
+                            is Screen.PdfView -> s.lesson.title
+                        }
+                        Text(
+                            text = subtitle,
+                            fontSize = 12.sp,
+                            color = Color(0xFFE6FFFA),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                },
+                navigationIcon = {
+                    if (currentScreen !is Screen.SemesterList) {
+                        IconButton(onClick = {
+                            currentScreen = when (val screen = currentScreen) {
+                                is Screen.PdfView -> {
+                                    val sem = catalogData.firstOrNull { s -> s.modules.any { m -> m.lessons.any { l -> l.id == screen.lesson.id } } }
+                                    val mod = sem?.modules?.firstOrNull { m -> m.lessons.any { l -> l.id == screen.lesson.id } }
+                                    if (sem != null && mod != null) Screen.LessonList(sem, mod) else Screen.SemesterList
+                                }
+                                is Screen.LessonList -> Screen.ModuleList(screen.semester)
+                                is Screen.ModuleList -> Screen.SemesterList
+                                Screen.SemesterList -> Screen.SemesterList
+                            }
+                        }) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "رجوع",
+                                tint = Color.White
+                            )
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    titleContentColor = Color.White
+                )
+            )
+        },
+        bottomBar = {
+            CopyrightFooter()
+        }
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+                .background(MaterialTheme.colorScheme.background)
+        ) {
+            when (val screen = currentScreen) {
+                is Screen.SemesterList -> {
+                    SemesterListScreen(
+                        semesters = catalogData,
+                        onSelectSemester = { sem -> currentScreen = Screen.ModuleList(sem) },
+                        onQuickOpenLesson = { lesson, file ->
+                            currentScreen = Screen.PdfView(lesson, file)
+                        }
+                    )
+                }
+                is Screen.ModuleList -> {
+                    ModuleListScreen(
+                        semester = screen.semester,
+                        onSelectModule = { mod -> currentScreen = Screen.LessonList(screen.semester, mod) }
+                    )
+                }
+                is Screen.LessonList -> {
+                    LessonListScreen(
+                        semester = screen.semester,
+                        module = screen.module,
+                        onOpenPdf = { lesson, file ->
+                            currentScreen = Screen.PdfView(lesson, file)
+                        }
+                    )
+                }
+                is Screen.PdfView -> {
+                    PdfRendererScreen(
+                        lesson = screen.lesson,
+                        pdfFile = screen.file,
+                        onClose = {
+                            val sem = catalogData.firstOrNull { s -> s.modules.any { m -> m.lessons.any { l -> l.id == screen.lesson.id } } }
+                            val mod = sem?.modules?.firstOrNull { m -> m.lessons.any { l -> l.id == screen.lesson.id } }
+                            currentScreen = if (sem != null && mod != null) Screen.LessonList(sem, mod) else Screen.SemesterList
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// 6. Centered Copyright Footer
+// ==========================================
+@Composable
+fun CopyrightFooter() {
+    Surface(
+        color = Color(0xFFF1F5F9),
+        shadowElevation = 4.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 10.dp, horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = "جميع الحقوق محفوظة | حميدوش عبدالتواب - مختص في حفظ الصحة",
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 11.5.sp,
+                    color = Color(0xFF475569)
+                ),
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+// ==========================================
+// 7. Screen: Semesters List (S1 - S6)
+// ==========================================
+@Composable
+fun SemesterListScreen(
+    semesters: List<Semester>,
+    onSelectSemester: (Semester) -> Unit,
+    onQuickOpenLesson: (LessonItem, File) -> Unit
+) {
+    var searchKeyword by remember { mutableStateOf("") }
+    val context = LocalContext.current
+
+    val allLessons = remember {
+        semesters.flatMap { s ->
+            s.modules.flatMap { m ->
+                m.lessons.map { l -> Triple(s, m, l) }
+            }
+        }
+    }
+
+    val filteredSearch = remember(searchKeyword) {
+        if (searchKeyword.isBlank()) emptyList()
+        else {
+            val q = searchKeyword.trim().lowercase()
+            allLessons.filter { (_, m, l) ->
+                l.title.lowercase().contains(q) ||
+                l.chapter.lowercase().contains(q) ||
+                m.name.lowercase().contains(q)
+            }
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        OutlinedTextField(
+            value = searchKeyword,
+            onValueChange = { searchKeyword = it },
+            placeholder = { Text("بحث في جميع الدروس والملفات...", fontSize = 14.sp) },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            trailingIcon = {
+                if (searchKeyword.isNotEmpty()) {
+                    IconButton(onClick = { searchKeyword = "" }) {
+                        Icon(Icons.Default.Close, contentDescription = "مسح")
+                    }
+                }
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = Color.White,
+                unfocusedContainerColor = Color.White,
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = Color(0xFFCBD5E1)
+            )
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (searchKeyword.isNotBlank()) {
+            Text(
+                text = "نتائج البحث (${filteredSearch.size}):",
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            if (filteredSearch.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("لا توجد ملفات مطابقة للبحث", color = Color.Gray)
+                }
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(filteredSearch) { (sem, mod, lesson) ->
+                        LessonCard(
+                            lesson = lesson,
+                            moduleName = mod.name,
+                            semesterName = sem.name,
+                            onOpen = { file -> onQuickOpenLesson(lesson, file) }
+                        )
+                    }
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer)
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.School,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(32.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = "المسار الدراسي الكامل (S1 إلى S6)",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        text = "6 سداسيات دراسية • ${catalogData.sumOf { it.modules.size }} مقياس • ${allLessons.size} ملف ومحاضرة",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(semesters) { semester ->
+                    SemesterCard(semester = semester, onClick = { onSelectSemester(semester) })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SemesterCard(semester: Semester, onClick: () -> Unit) {
+    val totalFiles = semester.modules.sumOf { it.lessons.size }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Folder,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = semester.name,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = "${semester.modules.size} مقاييس • ${totalFiles} درس ومحاضرة",
+                        fontSize = 12.5.sp,
+                        color = Color(0xFF64748B)
+                    )
+                }
+            }
+            Icon(
+                Icons.Default.ChevronLeft,
+                contentDescription = null,
+                tint = Color(0xFF94A3B8)
+            )
+        }
+    }
+}
+
+// ==========================================
+// 8. Screen: Modules List
+// ==========================================
+@Composable
+fun ModuleListScreen(
+    semester: Semester,
+    onSelectModule: (StudyModule) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text(
+            text = "مقاييس ${semester.name}",
+            fontWeight = FontWeight.Bold,
+            fontSize = 18.sp,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = 12.dp)
+        )
+
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(semester.modules) { module ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelectModule(module) },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(Color(0xFFE0F2FE)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.MenuBook,
+                                    contentDescription = null,
+                                    tint = Color(0xFF0284C7),
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(14.dp))
+                            Column {
+                                Text(
+                                    text = module.name,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 15.sp,
+                                    color = Color(0xFF1E293B)
+                                )
+                                Text(
+                                    text = "${module.lessons.size} ملفات ومحاضرات",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF64748B)
+                                )
+                            }
+                        }
+                        Icon(
+                            Icons.Default.ChevronLeft,
+                            contentDescription = null,
+                            tint = Color(0xFF94A3B8)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// 9. Screen: Lessons List & Download Manager
+// ==========================================
+@Composable
+fun LessonListScreen(
+    semester: Semester,
+    module: StudyModule,
+    onOpenPdf: (LessonItem, File) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text(
+            text = "دروس مقياس: ${module.name}",
+            fontWeight = FontWeight.Bold,
+            fontSize = 17.sp,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            text = "${semester.name} • ${module.lessons.size} ملف متوفر",
+            fontSize = 12.5.sp,
+            color = Color(0xFF64748B),
+            modifier = Modifier.padding(top = 2.dp, bottom = 14.dp)
+        )
+
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(module.lessons) { lesson ->
+                LessonCard(
+                    lesson = lesson,
+                    moduleName = module.name,
+                    semesterName = semester.name,
+                    onOpen = { file -> onOpenPdf(lesson, file) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun LessonCard(
+    lesson: LessonItem,
+    moduleName: String? = null,
+    semesterName: String? = null,
+    onOpen: (File) -> Unit
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    
+    val vaultDir = remember { File(context.filesDir, "vault").apply { if (!exists()) mkdirs() } }
+    val localFile = remember(lesson.id) { File(vaultDir, "${lesson.id}.pdf") }
+    
+    var isDownloaded by remember { mutableStateOf(localFile.exists() && localFile.length() > 0) }
+    var isDownloading by remember { mutableStateOf(false) }
+    var downloadProgress by remember { mutableStateOf(0f) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(Color(0xFFFEF2F2)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.PictureAsPdf,
+                        contentDescription = null,
+                        tint = Color(0xFFDC2626),
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = lesson.title,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.5.sp,
+                        color = Color(0xFF0F172A)
+                    )
+                    if (lesson.chapter.isNotBlank()) {
+                        Text(
+                            text = "الفصل / المحور: ${lesson.chapter}",
+                            fontSize = 12.sp,
+                            color = Color(0xFF475569),
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                    if (moduleName != null && semesterName != null) {
+                        Text(
+                            text = "$semesterName • $moduleName",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (isDownloading) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    LinearProgressIndicator(
+                        progress = { downloadProgress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(CircleShape),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = Color(0xFFE2E8F0)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "جاري التحميل في الذاكرة الداخلية الخاصة للتطبيق... %$((downloadProgress * 100).toInt())",
+                        fontSize = 11.5.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (isDownloaded) {
+                        Button(
+                            onClick = { onOpen(localFile) },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("قراءة أوفلاين", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                if (localFile.exists()) localFile.delete()
+                                isDownloaded = false
+                                Toast.makeText(context, "تم حذف الملف من الذاكرة المحلية", Toast.LENGTH_SHORT).show()
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF4444))
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = "حذف", modifier = Modifier.size(18.dp))
+                        }
+                    } else {
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    isDownloading = true
+                                    downloadProgress = 0.05f
+                                    val success = downloadPdfToInternalVault(
+                                        context = context,
+                                        fileId = lesson.driveId,
+                                        destination = localFile,
+                                        onProgress = { p -> downloadProgress = p }
+                                    )
+                                    isDownloading = false
+                                    if (success) {
+                                        isDownloaded = true
+                                        Toast.makeText(context, "اكتمل التحميل في المساحة الخاصة للتطبيق!", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "تعذر التحميل، تحقق من اتصال الإنترنت.", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F766E))
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("تحميل أوفلاين آمن", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+
+                        FilledTonalButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    isDownloading = true
+                                    downloadProgress = 0.1f
+                                    val success = downloadPdfToInternalVault(
+                                        context = context,
+                                        fileId = lesson.driveId,
+                                        destination = localFile,
+                                        onProgress = { p -> downloadProgress = p }
+                                    )
+                                    isDownloading = false
+                                    if (success) {
+                                        isDownloaded = true
+                                        onOpen(localFile)
+                                    } else {
+                                        Toast.makeText(context, "تعذر فتح الملف مباشرة، تأكد من الاتصال.", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.MenuBook, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("قراءة مباشرة", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// 10. Background Secure Downloader
+// ==========================================
+suspend fun downloadPdfToInternalVault(
+    context: Context,
+    fileId: String,
+    destination: File,
+    onProgress: (Float) -> Unit
+): Boolean = withContext(Dispatchers.IO) {
+    try {
+        val downloadUrl = "https://drive.google.com/uc?export=download&id=$fileId"
+        var connection = URL(downloadUrl).openConnection() as HttpURLConnection
+        connection.instanceFollowRedirects = true
+        connection.connectTimeout = 15000
+        connection.readTimeout = 30000
+        connection.requestMethod = "GET"
+        connection.connect()
+
+        var redirectCount = 0
+        while (connection.responseCode in 300..399 && redirectCount < 5) {
+            val newUrl = connection.getHeaderField("Location") ?: break
+            connection.disconnect()
+            connection = URL(newUrl).openConnection() as HttpURLConnection
+            connection.instanceFollowRedirects = true
+            connection.connectTimeout = 15000
+            connection.readTimeout = 30000
+            connection.connect()
+            redirectCount++
+        }
+
+        if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+            connection.disconnect()
+            return@withContext false
+        }
+
+        val contentLength = connection.contentLength
+        val inputStream = connection.inputStream
+        val outputStream = FileOutputStream(destination)
+
+        val buffer = ByteArray(8192)
+        var bytesRead: Int
+        var totalBytesRead = 0L
+
+        while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+            outputStream.write(buffer, 0, bytesRead)
+            totalBytesRead += bytesRead
+            if (contentLength > 0) {
+                val progress = (totalBytesRead.toFloat() / contentLength.toFloat()).coerceIn(0f, 1f)
+                withContext(Dispatchers.Main) {
+                    onProgress(progress)
+                }
+            }
+        }
+
+        outputStream.flush()
+        outputStream.close()
+        inputStream.close()
+        connection.disconnect()
+
+        return@withContext destination.exists() && destination.length() > 0
+    } catch (e: Exception) {
+        e.printStackTrace()
+        if (destination.exists()) destination.delete()
+        return@withContext false
+    }
+}
+
+// ==========================================
+// 11. Native High-Res PdfRenderer Screen
+// ==========================================
+@Composable
+fun PdfRendererScreen(
+    lesson: LessonItem,
+    pdfFile: File,
+    onClose: () -> Unit
+) {
+    var pageCount by remember { mutableStateOf(0) }
+    var currentPageIndex by remember { mutableStateOf(0) }
+    var pageBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var scale by remember { mutableStateOf(1f) }
+    var offsetX by remember { mutableStateOf(0f) }
+    var offsetY by remember { mutableStateOf(0f) }
+    var isLoadingPage by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    val coroutineScope = rememberCoroutineScope()
+
+    fun renderPage(index: Int) {
+        coroutineScope.launch(Dispatchers.IO) {
+            try {
+                isLoadingPage = true
+                val fileDescriptor = ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY)
+                val renderer = PdfRenderer(fileDescriptor)
+                pageCount = renderer.pageCount
+
+                if (index in 0 until pageCount) {
+                    val page = renderer.openPage(index)
+                    // High resolution multiplier (2.5x) for crystal-clear French & Arabic typography
+                    val width = (page.width * 2.5f).toInt()
+                    val height = (page.height * 2.5f).toInt()
+                    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                    bitmap.eraseColor(android.graphics.Color.WHITE)
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    page.close()
+                    renderer.close()
+                    fileDescriptor.close()
+
+                    withContext(Dispatchers.Main) {
+                        pageBitmap = bitmap
+                        currentPageIndex = index
+                        scale = 1f
+                        offsetX = 0f
+                        offsetY = 0f
+                        isLoadingPage = false
+                        errorMessage = null
+                    }
+                } else {
+                    renderer.close()
+                    fileDescriptor.close()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    isLoadingPage = false
+                    errorMessage = "تعذر عرض ملف الـ PDF: ${e.localizedMessage}"
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(pdfFile) {
+        renderPage(0)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFF1E293B))
+    ) {
+        // PDF Controls Top Bar
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF0F172A))
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Default.Close, contentDescription = "إغلاق", tint = Color.White)
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "صفحة ${currentPageIndex + 1} من ${pageCount}",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = { if (currentPageIndex > 0) renderPage(currentPageIndex - 1) },
+                    enabled = currentPageIndex > 0 && !isLoadingPage
+                ) {
+                    Icon(
+                        Icons.Default.NavigateBefore,
+                        contentDescription = "السابق",
+                        tint = if (currentPageIndex > 0) Color.White else Color.Gray
+                    )
+                }
+
+                IconButton(
+                    onClick = { if (currentPageIndex < pageCount - 1) renderPage(currentPageIndex + 1) },
+                    enabled = currentPageIndex < pageCount - 1 && !isLoadingPage
+                ) {
+                    Icon(
+                        Icons.Default.NavigateNext,
+                        contentDescription = "التالي",
+                        tint = if (currentPageIndex < pageCount - 1) Color.White else Color.Gray
+                    )
+                }
+            }
+        }
+
+        // PDF View Area with Pinch-to-Zoom & Pan
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .weight(1f)
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        scale = (scale * zoom).coerceIn(1f, 5f)
+                        if (scale > 1f) {
+                            offsetX += pan.x
+                            offsetY += pan.y
+                        } else {
+                            offsetX = 0f
+                            offsetY = 0f
+                        }
+                    }
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            if (isLoadingPage) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+            } else if (errorMessage != null) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.Error, contentDescription = null, tint = Color.Red, modifier = Modifier.size(48.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(text = errorMessage ?: "", color = Color.White, textAlign = TextAlign.Center)
+                }
+            } else {
+                pageBitmap?.let { bmp ->
+                    Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = "صفحة ${currentPageIndex + 1}",
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer(
+                                scaleX = scale,
+                                scaleY = scale,
+                                translationX = offsetX,
+                                translationY = offsetY
+                            )
+                    )
+                }
+            }
+        }
+    }
+}
