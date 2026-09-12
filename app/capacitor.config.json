@@ -1,0 +1,8 @@
+{
+  "appId": "com.hsp.hygieneapp",
+  "appName": "مختص في حفظ الصحة",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}

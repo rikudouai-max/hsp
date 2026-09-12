@@ -1,0 +1,57 @@
+{
+  "name": "mokhtas-hifd-saha",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "electron:build": "npm run build && electron-builder --win portable --dir -c.win.target=portable",
+    "dist:exe": "npm run build && electron-builder --win portable"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3",
+    "oxlint": "^1.81.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0"
+  },
+  "main": "main.cjs",
+  "productName": "مختص في حفظ الصحة",
+  "description": "مختص في حفظ الصحة",
+  "build": {
+    "appId": "com.hsp.hygieneapp",
+    "productName": "مختص في حفظ الصحة",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "main.cjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "artifactName": "HSP-Offline-App-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "HSP-Offline-App.exe"
+    }
+  }
+}

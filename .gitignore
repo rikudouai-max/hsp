@@ -1,0 +1,15 @@
+node_modules/
+dist/
+dist-electron/
+*.exe
+*.log
+.DS_Store
+Thumbs.db
+app/node_modules/
+app/dist-electron/
+app/android/.gradle/
+app/android/build/
+app/android/app/build/
+ds_*.json
+ds1.json
+gdrive.html

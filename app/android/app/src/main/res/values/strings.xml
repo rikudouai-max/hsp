@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">مختص في حفظ الصحة</string>
+    <string name="title_activity_main">مختص في حفظ الصحة</string>
+    <string name="package_name">com.hsp.hygieneapp</string>
+    <string name="custom_url_scheme">com.hsp.hygieneapp</string>
+</resources>

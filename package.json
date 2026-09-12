@@ -1,0 +1,11 @@
+{
+  "name": "mokhtas-hifd-saha",
+  "version": "1.0.0",
+  "description": "تطبيق مختص في حفظ الصحة",
+  "scripts": {
+    "dev": "npm --prefix app run dev",
+    "build": "npm --prefix app run build",
+    "preview": "npm --prefix app run preview"
+  },
+  "productName": "مختص في حفظ الصحة"
+}
