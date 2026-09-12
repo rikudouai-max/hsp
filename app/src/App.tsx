@@ -2,9 +2,10 @@ import React, { useState, useEffect, useMemo, useTransition } from 'react';
 import type { SemesterNode, SubjectNode, FileItem } from './types';
 import localTreeData from './treeData.json';
 import localDataList from './dataList.json';
+import { CanvasPdfViewer } from './CanvasPdfViewer';
 import {
   downloadAndSaveFile,
-  getStoredFileBlobUrl,
+  readOfflinePdfBinary,
   getAllStoredFileIds,
   deleteStoredFile,
   getTotalStorageUsed,
@@ -57,7 +58,7 @@ export default function App() {
   const [storageStats, setStorageStats] = useState<{ totalBytes: number; count: number }>({ totalBytes: 0, count: 0 });
 
   // PDF Viewer Modal
-  const [activePdf, setActivePdf] = useState<{ file: FileItem; blobUrl: string } | null>(null);
+  const [activePdf, setActivePdf] = useState<{ file: FileItem; data?: Uint8Array; blobUrl?: string } | null>(null);
 
   // Toast Notification
   const [toast, setToast] = useState<string | null>(null);
@@ -242,26 +243,39 @@ export default function App() {
     }
   };
 
-  // Open file handler (فتح الملف)
+  // Open file handler (قراءة الملف بدون اتصال مع حماية المحتوى)
   const handleOpenFile = async (file: FileItem) => {
-    // 1. Check local offline storage (Electron directory / IndexedDB)
+    console.log('[App] Attempting to open file:', file.fileName, 'id:', file.id);
+    // 1. Check if file is stored in encrypted vault / IndexedDB
     try {
-      const blobUrl = await getStoredFileBlobUrl(file.id);
-      if (blobUrl) {
-        setActivePdf({ file, blobUrl });
+      const res = await readOfflinePdfBinary(file.id);
+      if (res.success && (res.uint8Array || res.blobUrl)) {
+        console.log('[App] Offline binary successfully retrieved for in-memory rendering');
+        setActivePdf({ 
+          file, 
+          data: res.uint8Array, 
+          blobUrl: res.blobUrl 
+        });
+        return;
+      } else if (res.error && downloadedIds.has(file.id)) {
+        console.error('[App] Failed to read cached file:', res.error);
+        showToast('⚠️ خطأ في قراءة النسخة المشفرة: ' + res.error);
         return;
       }
-    } catch (e) {
-      console.error('Error fetching from local storage:', e);
+    } catch (e: any) {
+      console.error('[App] Error reading offline PDF binary:', e);
+      showToast('⚠️ خطأ أثناء فتح الملف: ' + (e.message || 'خطأ غير معروف'));
     }
 
     // 2. If not stored locally:
     if (!navigator.onLine) {
+      console.warn('[App] File not downloaded and device is offline');
       showToast('هذا الملف لم يتم تحميله بعد. اتصل بالإنترنت لتحميله.');
       return;
     }
 
-    // 3. If online, open Google Drive view URL directly in a new tab or viewer
+    // 3. If online, view directly via Google Drive view URL
+    console.log('[App] Opening via online link in browser');
     window.open(file.viewUrl, '_blank');
   };
 
@@ -732,7 +746,7 @@ export default function App() {
       </footer>
 
 
-      {/* Protected DRM In-App PDF Viewer */}
+      {/* Protected DRM In-App PDF Canvas Viewer (pure in-memory Uint8Array) */}
       {activePdf && (
         <div 
           className="modal-overlay" 
@@ -750,13 +764,12 @@ export default function App() {
           <div 
             className="modal-body protected-viewer"
             onContextMenu={(e) => e.preventDefault()}
+            style={{ flex: 1, position: 'relative', overflow: 'hidden' }}
           >
-            {/* Embedded in-memory viewer with disabled toolbar and print/save */}
-            <iframe
-              src={`${activePdf.blobUrl}#toolbar=0&navpanes=0&scrollbar=1`}
-              title={activePdf.file.fileName}
-              className="pdf-frame protected-frame"
-              sandbox="allow-scripts allow-same-origin"
+            <CanvasPdfViewer
+              data={activePdf.data}
+              blobUrl={activePdf.blobUrl}
+              fileName={activePdf.file.fileName}
             />
           </div>
         </div>

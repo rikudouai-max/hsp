@@ -1,4 +1,4 @@
-// Hybrid Storage Engine: Native Electron app.getPath('userData') / downloads, with IndexedDB fallback
+// Hybrid Storage Engine: Native Electron app.getPath('userData') / vault, with IndexedDB fallback
 const DB_NAME = 'HSP_OFFLINE_DB';
 const DB_VERSION = 1;
 const STORE_NAME = 'downloaded_files';
@@ -12,12 +12,20 @@ export interface StoredFile {
   downloadedAt: number;
 }
 
+export interface ReadPdfResult {
+  success: boolean;
+  uint8Array?: Uint8Array;
+  blobUrl?: string;
+  error?: string;
+}
+
 declare global {
   interface Window {
     electronAPI?: {
       downloadPdf: (fileId: string, fileName: string) => Promise<{ success: boolean; size?: number; path?: string; error?: string }>;
       getDownloadedList: () => Promise<string[]>;
-      getDownloadedPdfData: (fileId: string) => Promise<{ success: boolean; base64?: string; size?: number; error?: string }>;
+      readOfflinePdf: (fileId: string) => Promise<{ success: boolean; data?: Uint8Array; size?: number; error?: string }>;
+      getDownloadedPdfData: (fileId: string) => Promise<{ success: boolean; data?: Uint8Array; size?: number; error?: string }>;
       deleteDownloadedPdf: (fileId: string) => Promise<{ success: boolean; error?: string }>;
       getStorageStats: () => Promise<{ totalBytes: number; count: number }>;
     };
@@ -41,17 +49,19 @@ function openDB(): Promise<IDBDatabase> {
 // Download directly from Google Drive uc?export=download and store in Electron internal directory
 export async function downloadAndSaveFile(fileId: string, fileName: string): Promise<boolean> {
   if (window.electronAPI) {
+    console.log(`[Storage] Triggering Electron download for ${fileName} (${fileId})`);
     const res = await window.electronAPI.downloadPdf(fileId, fileName);
     if (!res.success) {
-      throw new Error(res.error || 'Download failed');
+      throw new Error(res.error || 'فشل التحميل من Google Drive');
     }
     return true;
   }
 
   // Web / Browser fallback via IndexedDB
+  console.log(`[Storage] Triggering Web/IndexedDB download for ${fileName} (${fileId})`);
   const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
   const res = await fetch(directUrl);
-  if (!res.ok) throw new Error('Download failed: ' + res.status);
+  if (!res.ok) throw new Error(`فشل التنزيل رمز الحالة: ${res.status}`);
   const blob = await res.blob();
   await saveFileLocally(fileId, fileName, 'application/pdf', blob);
   return true;
@@ -76,38 +86,51 @@ export async function saveFileLocally(id: string, name: string, mimeType: string
   });
 }
 
-export async function getStoredFileBlobUrl(id: string): Promise<string | null> {
-  // 1. Check Electron native storage first
+// Read offline PDF as pure Uint8Array (preserving raw binary integrity, no string conversion)
+export async function readOfflinePdfBinary(id: string): Promise<ReadPdfResult> {
+  // 1. Electron IPC read
   if (window.electronAPI) {
-    const res = await window.electronAPI.getDownloadedPdfData(id);
-    if (res.success && res.base64) {
-      const byteCharacters = atob(res.base64);
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
+    try {
+      console.log(`[Storage] Reading offline PDF via Electron IPC for id: ${id}`);
+      const res = await window.electronAPI.readOfflinePdf(id);
+      if (res.success && res.data) {
+        // res.data is a raw Uint8Array from the decrypted buffer
+        const rawBytes = res.data;
+        console.log(`[Storage] Successfully received binary Uint8Array: ${rawBytes.byteLength} bytes`);
+        const blob = new Blob([rawBytes.buffer as ArrayBuffer], { type: 'application/pdf' });
+        const blobUrl = URL.createObjectURL(blob);
+        return { success: true, uint8Array: rawBytes, blobUrl };
       }
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: 'application/pdf' });
-      return URL.createObjectURL(blob);
+      return { success: false, error: res.error || 'فشل قراءة الملف المشفر محلياً' };
+    } catch (e: any) {
+      console.error('[Storage] Electron readOfflinePdf failed:', e);
+      return { success: false, error: e.message || 'خطأ أثناء قراءة الملف من الذاكرة' };
     }
   }
 
-  // 2. Fallback to IndexedDB
-  const db = await openDB();
-  return new Promise((resolve) => {
-    const tx = db.transaction(STORE_NAME, 'readonly');
-    const store = tx.objectStore(STORE_NAME);
-    const req = store.get(id);
-    req.onsuccess = () => {
-      const file: StoredFile | undefined = req.result;
-      if (file && file.blob) {
-        resolve(URL.createObjectURL(file.blob));
-      } else {
-        resolve(null);
-      }
-    };
-    req.onerror = () => resolve(null);
-  });
+  // 2. IndexedDB fallback
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.get(id);
+      req.onsuccess = async () => {
+        const file: StoredFile | undefined = req.result;
+        if (file && file.blob) {
+          const arrayBuf = await file.blob.arrayBuffer();
+          const uint8 = new Uint8Array(arrayBuf);
+          const blobUrl = URL.createObjectURL(file.blob);
+          resolve({ success: true, uint8Array: uint8, blobUrl });
+        } else {
+          resolve({ success: false, error: 'الملف غير موجود في التخزين المؤقت' });
+        }
+      };
+      req.onerror = () => resolve({ success: false, error: 'خطأ في قاعدة بيانات التخزين المؤقت' });
+    });
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
 }
 
 export async function getAllStoredFileIds(): Promise<Set<string>> {

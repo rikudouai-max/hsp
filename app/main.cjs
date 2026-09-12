@@ -146,14 +146,50 @@ ipcMain.handle('get-downloaded-list', async () => {
   }
 });
 
-// Decrypt purely in-memory (RAM) and send back as base64
+// Solid IPC handler that reads the encrypted file, decrypts it into a raw Buffer,
+// and sends it to the renderer as a pure binary Uint8Array / Buffer without string corruption.
+ipcMain.handle('read-offline-pdf', async (event, { fileId }) => {
+  try {
+    console.log(`[IPC] Reading encrypted offline PDF for fileId: ${fileId}`);
+    const filePath = path.join(getVaultDir(), `${fileId}.enc`);
+    if (!fs.existsSync(filePath)) {
+      console.error(`[IPC] File not found at ${filePath}`);
+      return { success: false, error: 'الملف غير موجود في مجلد التخزين المحلي المحمي' };
+    }
+
+    const encryptedBuffer = fs.readFileSync(filePath);
+    console.log(`[IPC] Read encrypted size: ${encryptedBuffer.length} bytes`);
+    
+    const decryptedBuffer = decryptBuffer(encryptedBuffer);
+    console.log(`[IPC] Successfully decrypted into binary buffer: ${decryptedBuffer.length} bytes`);
+
+    // Verify PDF header magic bytes '%PDF'
+    const header = decryptedBuffer.subarray(0, 5).toString('ascii');
+    console.log(`[IPC] PDF Header magic bytes: ${header}`);
+    if (!header.startsWith('%PDF')) {
+      console.warn(`[IPC] Warning: file may not be a standard PDF header: ${header}`);
+    }
+
+    // Returning raw Uint8Array preserves exact binary integrity across Electron IPC
+    return { 
+      success: true, 
+      data: new Uint8Array(decryptedBuffer), 
+      size: decryptedBuffer.length 
+    };
+  } catch (err) {
+    console.error('[IPC] Error decrypting offline PDF:', err);
+    return { success: false, error: err.message || 'فشل فك تشفير الملف في الذاكرة' };
+  }
+});
+
+// Legacy backward-compatible handler
 ipcMain.handle('get-downloaded-pdf-data', async (event, { fileId }) => {
   try {
     const filePath = path.join(getVaultDir(), `${fileId}.enc`);
     if (fs.existsSync(filePath)) {
       const encryptedBuffer = fs.readFileSync(filePath);
       const decryptedBuffer = decryptBuffer(encryptedBuffer);
-      return { success: true, base64: decryptedBuffer.toString('base64'), size: decryptedBuffer.length };
+      return { success: true, data: new Uint8Array(decryptedBuffer), size: decryptedBuffer.length };
     }
     return { success: false, error: 'File not found in encrypted vault' };
   } catch (err) {
