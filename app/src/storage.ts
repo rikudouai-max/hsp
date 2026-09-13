@@ -1,3 +1,5 @@
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
+
 // Hybrid Storage Engine: Native Electron app.getPath('userData') / vault, with IndexedDB fallback
 const DB_NAME = 'HSP_OFFLINE_DB';
 const DB_VERSION = 1;
@@ -46,7 +48,18 @@ function openDB(): Promise<IDBDatabase> {
   });
 }
 
-// Download directly from Google Drive uc?export=download and store in Electron internal directory
+// Convert base64 data to Blob in chunks to prevent stack overflow on large PDFs
+function base64ToBlob(base64Data: string, mimeType: string = 'application/pdf'): Blob {
+  const binaryString = atob(base64Data);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return new Blob([bytes], { type: mimeType });
+}
+
+// Download directly from Google Drive uc?export=download and store in Electron internal directory or IndexedDB
 export async function downloadAndSaveFile(fileId: string, fileName: string): Promise<boolean> {
   if (window.electronAPI) {
     console.log(`[Storage] Triggering Electron download for ${fileName} (${fileId})`);
@@ -57,9 +70,44 @@ export async function downloadAndSaveFile(fileId: string, fileName: string): Pro
     return true;
   }
 
-  // Web / Browser fallback via IndexedDB
-  console.log(`[Storage] Triggering Web/IndexedDB download for ${fileName} (${fileId})`);
   const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+
+  // Native Android / iOS via CapacitorHttp (bypasses WebView CORS completely)
+  if (Capacitor.isNativePlatform()) {
+    console.log(`[Storage] Native Android detected. Using CapacitorHttp to bypass CORS for ${fileName} (${fileId})`);
+    try {
+      const response = await CapacitorHttp.get({
+        url: directUrl,
+        responseType: 'blob',
+        readTimeout: 60000,
+        connectTimeout: 30000
+      });
+
+      if (response.status !== 200) {
+        throw new Error(`فشل التحميل من الخادم رمز الحالة: ${response.status}`);
+      }
+
+      let pdfBlob: Blob;
+      if (typeof response.data === 'string') {
+        // Native Capacitor returns blob as base64 string
+        pdfBlob = base64ToBlob(response.data, 'application/pdf');
+      } else if (response.data instanceof Blob) {
+        pdfBlob = response.data;
+      } else {
+        pdfBlob = new Blob([response.data], { type: 'application/pdf' });
+      }
+
+      await saveFileLocally(fileId, fileName, 'application/pdf', pdfBlob);
+      console.log(`[Storage] Successfully saved ${fileName} via CapacitorHttp (${pdfBlob.size} bytes)`);
+      return true;
+    } catch (nativeErr: any) {
+      console.error('[Storage] CapacitorHttp failed, attempting fallback fetch:', nativeErr);
+      // Fallback to fetch if CapacitorHttp encounters any issue
+    }
+  }
+
+  // Web / Browser / Fallback via IndexedDB
+  console.log(`[Storage] Triggering Web/IndexedDB download for ${fileName} (${fileId})`);
   const res = await fetch(directUrl);
   if (!res.ok) throw new Error(`فشل التنزيل رمز الحالة: ${res.status}`);
   const blob = await res.blob();
