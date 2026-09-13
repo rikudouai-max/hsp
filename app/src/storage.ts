@@ -63,7 +63,7 @@ function base64ToBlob(base64Data: string, mimeType: string = 'application/pdf'):
 }
 
 // Download directly from Google Drive uc?export=download and store in Electron internal directory or IndexedDB
-export async function downloadAndSaveFile(fileId: string, fileName: string): Promise<boolean> {
+export async function downloadAndSaveFile(fileId: string, fileName: string, customUrl?: string): Promise<boolean> {
   if (window.electronAPI) {
     console.log(`[Storage] Triggering Electron download for ${fileName} (${fileId})`);
     const res = await window.electronAPI.downloadPdf(fileId, fileName);
@@ -73,7 +73,10 @@ export async function downloadAndSaveFile(fileId: string, fileName: string): Pro
     return true;
   }
 
-  const directUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+  // Resolve direct URL
+  const directUrl = customUrl && customUrl.startsWith('http')
+    ? (customUrl.includes('drive.google.com/uc?') ? customUrl : `https://drive.google.com/uc?export=download&id=${fileId}`)
+    : `https://drive.google.com/uc?export=download&id=${fileId}`;
 
   // Native Android / iOS via CapacitorHttp (bypasses WebView CORS completely)
   if (Capacitor.isNativePlatform()) {
