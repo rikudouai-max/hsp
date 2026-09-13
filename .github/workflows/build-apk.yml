@@ -30,41 +30,65 @@ jobs:
       - name: Accept Android SDK Licenses
         run: yes | sdkmanager --licenses || true
 
-      - name: Install Dependencies
+      - name: Install Root and App Dependencies
         run: |
           npm ci || npm install
-          if [ -d "app" ]; then cd app && (npm ci || npm install) && cd ..; fi
+          if [ -d "app" ] && [ -f "app/package.json" ]; then
+            cd app && (npm ci || npm install) && cd ..
+          fi
 
-      - name: Build Web Assets
+      - name: Build Web Application
         run: |
           npm run build --if-present
-          if [ -d "app" ]; then cd app && npm run build --if-present && cd ..; fi
+          if [ -d "app" ] && [ -f "app/package.json" ]; then
+            cd app && npm run build --if-present && cd ..
+          fi
 
       - name: Sync Capacitor Android
-        run: npx cap sync android
-
-      - name: Grant Execute Permission to Gradle Wrapper
         run: |
-          find . -name "gradlew" -exec chmod +x {} +
+          if [ -d "app/android" ]; then
+            cd app && npx cap sync android && cd ..
+          else
+            npx cap sync android
+          fi
+
+      - name: Grant Execute Permissions to Gradle
+        run: find . -name "gradlew" -exec chmod +x {} +
 
       - name: Build Release APK with Gradle
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m -XX:+HeapDumpOnOutOfMemoryError"
         run: |
-          cd app/android || cd android
+          GRADLE_DIR=$(dirname $(find . -name "gradlew" | head -n 1))
+          echo "Building in $GRADLE_DIR"
+          cd "$GRADLE_DIR"
           ./gradlew assembleRelease -Pandroid.injected.testOnly=false --no-daemon
 
-      - name: Generate Signing Keystore
-        run: |
-          keytool -genkeypair -v -keystore release.keystore -alias app-alias -keyalg RSA -keysize 2048 -validity 10000 -storepass 123456 -keypass 123456 -dname "CN=HSP, OU=App, O=HSP, L=Algiers, S=Algiers, C=DZ"
-
-      - name: Sign Release APK
+      - name: Align and Sign Universal Release APK
         run: |
           mkdir -p output_apk
-          RAW_APK=$(find . -name "*release-unsigned.apk" -o -name "*release.apk" | head -n 1)
-          $ANDROID_HOME/build-tools/34.0.0/apksigner sign --ks release.keystore --ks-pass pass:123456 --key-pass pass:123456 --out output_apk/mokhtas-hifd-saha.apk "$RAW_APK"
+          
+          # Find Android build tools path dynamically
+          BUILD_TOOLS_DIR=$(find $ANDROID_HOME/build-tools/ -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)
+          echo "Using Android Build Tools from: $BUILD_TOOLS_DIR"
+          
+          # Find generated unsigned release apk
+          RAW_APK=$(find . -name "*release*.apk" -not -path "*/output_apk/*" | head -n 1)
+          echo "Found raw APK: $RAW_APK"
+          
+          # Create permanent keystore
+          keytool -genkeypair -v -keystore release.keystore -alias releaseKey -keyalg RSA -keysize 2048 -validity 10000 -storepass 123456 -keypass 123456 -dname "CN=HSP, OU=App, O=HSP, L=Algiers, S=Algiers, C=DZ"
+          
+          # Align APK for Android memory optimization
+          "$BUILD_TOOLS_DIR/zipalign" -v -p 4 "$RAW_APK" output_apk/aligned.apk
+          
+          # Sign APK with v2/v3 signing schemes
+          "$BUILD_TOOLS_DIR/apksigner" sign --ks release.keystore --ks-pass pass:123456 --key-pass pass:123456 --out output_apk/mokhtas-hifd-saha.apk output_apk/aligned.apk
+          
+          # Verify signature
+          "$BUILD_TOOLS_DIR/apksigner" verify output_apk/mokhtas-hifd-saha.apk
 
-      - name: Upload Signed APK
+      - name: Upload Universal Signed APK
         uses: actions/upload-artifact@v4
         with:
           name: mokhtas-hifd-saha-release
