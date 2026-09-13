@@ -182,6 +182,42 @@ ipcMain.handle('read-offline-pdf', async (event, { fileId }) => {
   }
 });
 
+// Open PDF with native default desktop application (Adobe Acrobat, Edge, Chrome, etc.)
+ipcMain.handle('open-offline-pdf', async (event, { fileId, fileName }) => {
+  try {
+    console.log(`[IPC] Opening offline PDF in native reader for fileId: ${fileId} (${fileName})`);
+    const vaultFilePath = path.join(getVaultDir(), `${fileId}.enc`);
+    if (!fs.existsSync(vaultFilePath)) {
+      return { success: false, error: 'الملف غير موجود في مجلد التخزين المحلي المحمي' };
+    }
+
+    const encryptedBuffer = fs.readFileSync(vaultFilePath);
+    const decryptedBuffer = decryptBuffer(encryptedBuffer);
+
+    // Save decrypted file temporarily to app temp directory for the external viewer
+    const tempDir = path.join(app.getPath('temp'), 'hsp_reader');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const safeName = fileName || `${fileId}.pdf`;
+    const tempFilePath = path.join(tempDir, safeName.endsWith('.pdf') ? safeName : `${safeName}.pdf`);
+    fs.writeFileSync(tempFilePath, decryptedBuffer);
+
+    // Launch in user's default PDF desktop application
+    const openErr = await shell.openPath(tempFilePath);
+    if (openErr) {
+      console.error('[IPC] shell.openPath error:', openErr);
+      return { success: false, error: `تعذر فتح الملف باستخدام التطبيق الافتراضي: ${openErr}` };
+    }
+
+    return { success: true, path: tempFilePath };
+  } catch (err) {
+    console.error('[IPC] Error in open-offline-pdf:', err);
+    return { success: false, error: err.message || 'خطأ أثناء فتح الملف في التطبيق الافتراضي' };
+  }
+});
+
 // Legacy backward-compatible handler
 ipcMain.handle('get-downloaded-pdf-data', async (event, { fileId }) => {
   try {

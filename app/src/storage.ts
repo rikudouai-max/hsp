@@ -1,4 +1,6 @@
 import { Capacitor, CapacitorHttp } from '@capacitor/core';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { FileOpener } from '@capawesome-team/capacitor-file-opener';
 
 // Hybrid Storage Engine: Native Electron app.getPath('userData') / vault, with IndexedDB fallback
 const DB_NAME = 'HSP_OFFLINE_DB';
@@ -27,6 +29,7 @@ declare global {
       downloadPdf: (fileId: string, fileName: string) => Promise<{ success: boolean; size?: number; path?: string; error?: string }>;
       getDownloadedList: () => Promise<string[]>;
       readOfflinePdf: (fileId: string) => Promise<{ success: boolean; data?: Uint8Array; size?: number; error?: string }>;
+      openOfflinePdf: (fileId: string, fileName: string) => Promise<{ success: boolean; path?: string; error?: string }>;
       getDownloadedPdfData: (fileId: string) => Promise<{ success: boolean; data?: Uint8Array; size?: number; error?: string }>;
       deleteDownloadedPdf: (fileId: string) => Promise<{ success: boolean; error?: string }>;
       getStorageStats: () => Promise<{ totalBytes: number; count: number }>;
@@ -134,6 +137,105 @@ export async function saveFileLocally(id: string, name: string, mimeType: string
   });
 }
 
+export async function getStoredFile(id: string): Promise<StoredFile | null> {
+  const db = await openDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.get(id);
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => resolve(null);
+  });
+}
+
+// Convert Blob to base64 string
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result as string;
+      // remove data:*/*;base64, prefix
+      const base64 = result.includes(',') ? result.split(',')[1] : result;
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Open PDF in user's preferred native reader application:
+ * - Desktop (Electron): shell.openPath() on temporary decrypted PDF
+ * - Android (Capacitor): write to cache/documents directory & open with FileOpener
+ * - Web fallback: open blob in new tab / native viewer
+ */
+export async function openFileWithNativeViewer(fileId: string, fileName: string): Promise<{ success: boolean; error?: string }> {
+  // 1. Electron Desktop (.exe)
+  if (window.electronAPI && window.electronAPI.openOfflinePdf) {
+    try {
+      console.log(`[Storage] Opening ${fileName} with Electron native viewer`);
+      const res = await window.electronAPI.openOfflinePdf(fileId, fileName);
+      if (res.success) return { success: true };
+      return { success: false, error: res.error || 'تعذر فتح الملف في قارئ PDF الافتراضي' };
+    } catch (e: any) {
+      console.error('[Storage] Electron openOfflinePdf failed:', e);
+      return { success: false, error: e.message || 'خطأ أثناء فتح الملف في ويندوز' };
+    }
+  }
+
+  // 2. Android Native (.apk)
+  if (Capacitor.isNativePlatform()) {
+    try {
+      console.log(`[Storage] Opening ${fileName} on Android via FileOpener`);
+      const stored = await getStoredFile(fileId);
+      if (!stored || !stored.blob) {
+        return { success: false, error: 'الملف غير موجود في التخزين المحلي' };
+      }
+
+      // Safe filename with .pdf extension
+      const safeName = (fileName || `${fileId}.pdf`).replace(/[/\\?%*:|"<>]/g, '_');
+      const cleanFileName = safeName.endsWith('.pdf') ? safeName : `${safeName}.pdf`;
+
+      // Convert stored blob to base64 for Filesystem
+      const base64Data = await blobToBase64(stored.blob);
+
+      // Write to app Cache directory
+      const writeResult = await Filesystem.writeFile({
+        path: cleanFileName,
+        data: base64Data,
+        directory: Directory.Cache,
+        recursive: true
+      });
+
+      console.log(`[Storage] Written file to cache: ${writeResult.uri}`);
+
+      // Open with native PDF reader app (Google Drive PDF Viewer, Adobe, etc.)
+      await FileOpener.openFile({
+        path: writeResult.uri,
+        mimeType: 'application/pdf'
+      });
+
+      return { success: true };
+    } catch (e: any) {
+      console.error('[Storage] Android FileOpener error:', e);
+      return { success: false, error: e.message || 'تعذر فتح الملف باستخدام قارئ PDF في هاتفك' };
+    }
+  }
+
+  // 3. Web Browser Fallback
+  try {
+    const stored = await getStoredFile(fileId);
+    if (stored && stored.blob) {
+      const blobUrl = URL.createObjectURL(stored.blob);
+      window.open(blobUrl, '_blank');
+      return { success: true };
+    }
+    return { success: false, error: 'الملف غير موجود في التخزين المؤقت' };
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
+}
+
 // Read offline PDF as pure Uint8Array (preserving raw binary integrity, no string conversion)
 export async function readOfflinePdfBinary(id: string): Promise<ReadPdfResult> {
   // 1. Electron IPC read
@@ -142,9 +244,7 @@ export async function readOfflinePdfBinary(id: string): Promise<ReadPdfResult> {
       console.log(`[Storage] Reading offline PDF via Electron IPC for id: ${id}`);
       const res = await window.electronAPI.readOfflinePdf(id);
       if (res.success && res.data) {
-        // res.data is a raw Uint8Array from the decrypted buffer
         const rawBytes = res.data;
-        console.log(`[Storage] Successfully received binary Uint8Array: ${rawBytes.byteLength} bytes`);
         const blob = new Blob([rawBytes.buffer as ArrayBuffer], { type: 'application/pdf' });
         const blobUrl = URL.createObjectURL(blob);
         return { success: true, uint8Array: rawBytes, blobUrl };

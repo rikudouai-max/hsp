@@ -2,10 +2,9 @@ import React, { useState, useEffect, useMemo, useTransition } from 'react';
 import type { SemesterNode, SubjectNode, FileItem } from './types';
 import localTreeData from './treeData.json';
 import localDataList from './dataList.json';
-import { CanvasPdfViewer } from './CanvasPdfViewer';
 import {
   downloadAndSaveFile,
-  readOfflinePdfBinary,
+  openFileWithNativeViewer,
   getAllStoredFileIds,
   deleteStoredFile,
   getTotalStorageUsed,
@@ -56,9 +55,6 @@ export default function App() {
 
   // Storage stats
   const [storageStats, setStorageStats] = useState<{ totalBytes: number; count: number }>({ totalBytes: 0, count: 0 });
-
-  // PDF Viewer Modal
-  const [activePdf, setActivePdf] = useState<{ file: FileItem; data?: Uint8Array; blobUrl?: string } | null>(null);
 
   // Toast Notification
   const [toast, setToast] = useState<string | null>(null);
@@ -243,48 +239,46 @@ export default function App() {
     }
   };
 
-  // Open file handler (قراءة الملف بدون اتصال مع حماية المحتوى)
+  // Open file handler (فتح الملف عبر قارئ الـ PDF الافتراضي للنظام بدون اتصال أو عبر الإنترنت)
   const handleOpenFile = async (file: FileItem) => {
     console.log('[App] Attempting to open file:', file.fileName, 'id:', file.id);
-    // 1. Check if file is stored in encrypted vault / IndexedDB
-    try {
-      const res = await readOfflinePdfBinary(file.id);
-      if (res.success && (res.uint8Array || res.blobUrl)) {
-        console.log('[App] Offline binary successfully retrieved for in-memory rendering');
-        setActivePdf({ 
-          file, 
-          data: res.uint8Array, 
-          blobUrl: res.blobUrl 
-        });
-        return;
-      } else if (res.error && downloadedIds.has(file.id)) {
-        console.error('[App] Failed to read cached file:', res.error);
-        showToast('⚠️ خطأ في قراءة النسخة المشفرة: ' + res.error);
-        return;
-      }
-    } catch (e: any) {
-      console.error('[App] Error reading offline PDF binary:', e);
-      showToast('⚠️ خطأ أثناء فتح الملف: ' + (e.message || 'خطأ غير معروف'));
-    }
 
-    // 2. If not stored locally:
-    if (!navigator.onLine) {
-      console.warn('[App] File not downloaded and device is offline');
-      showToast('هذا الملف لم يتم تحميله بعد. اتصل بالإنترنت لتحميله.');
+    // 1. If file is downloaded locally, open directly in native external reader
+    if (downloadedIds.has(file.id)) {
+      showToast('جاري فتح ' + file.fileName + ' في تطبيق قراءة الـ PDF...');
+      const res = await openFileWithNativeViewer(file.id, file.fileName);
+      if (!res.success) {
+        showToast('⚠️ ' + (res.error || 'تعذر فتح الملف'));
+      }
       return;
     }
 
-    // 3. If online, view directly via Google Drive view URL
-    console.log('[App] Opening via online link in browser');
-    window.open(file.viewUrl, '_blank');
-  };
-
-  // Close active PDF viewer
-  const closePdfViewer = () => {
-    if (activePdf?.blobUrl) {
-      URL.revokeObjectURL(activePdf.blobUrl);
+    // 2. If not stored locally and device is offline:
+    if (!navigator.onLine) {
+      console.warn('[App] File not downloaded and device is offline');
+      showToast('هذا الملف غير متوفر أوفلاين. اتصل بالإنترنت لتحميله.');
+      return;
     }
-    setActivePdf(null);
+
+    // 3. If online, auto-download for fast native opening or fallback to viewUrl
+    try {
+      showToast('جاري تحضير الملف وفتحه في قارئ الـ PDF...');
+      setDownloadingIds((prev) => new Set(prev).add(file.id));
+      await downloadAndSaveFile(file.id, file.fileName);
+      await refreshLocalDb();
+      setDownloadingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(file.id);
+        return next;
+      });
+      const res = await openFileWithNativeViewer(file.id, file.fileName);
+      if (!res.success) {
+        window.open(file.viewUrl, '_blank');
+      }
+    } catch (err: any) {
+      console.error('[App] Online open error, falling back to browser tab:', err);
+      window.open(file.viewUrl, '_blank');
+    }
   };
 
   // Navigation helpers
@@ -744,36 +738,6 @@ export default function App() {
           جميع الحقوق محفوظة | حميدوش عبدالتواب - مختص في حفظ الصحة
         </p>
       </footer>
-
-
-      {/* Protected DRM In-App PDF Canvas Viewer (pure in-memory Uint8Array) */}
-      {activePdf && (
-        <div 
-          className="modal-overlay" 
-          onContextMenu={(e) => e.preventDefault()}
-        >
-          <div className="modal-header">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
-              <span style={{ fontSize: '1.1rem' }}>🛡️</span>
-              <span className="modal-title">{activePdf.file.fileName}</span>
-            </div>
-            <button className="btn btn-outline" onClick={closePdfViewer}>
-              إغلاق ✕
-            </button>
-          </div>
-          <div 
-            className="modal-body protected-viewer"
-            onContextMenu={(e) => e.preventDefault()}
-            style={{ flex: 1, position: 'relative', overflow: 'hidden' }}
-          >
-            <CanvasPdfViewer
-              data={activePdf.data}
-              blobUrl={activePdf.blobUrl}
-              fileName={activePdf.file.fileName}
-            />
-          </div>
-        </div>
-      )}
     </>
   );
 
