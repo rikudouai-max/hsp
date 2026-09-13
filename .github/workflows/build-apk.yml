@@ -1,4 +1,4 @@
-﻿name: Build Android APK
+﻿name: Build Universal Android APK
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -17,6 +18,7 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '21'
+          cache: 'gradle'
 
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
@@ -24,53 +26,47 @@ jobs:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: '**/package-lock.json'
-        continue-on-error: true
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
 
       - name: Accept Android SDK Licenses
-        run: |
-          yes | sdkmanager --licenses || true
+        run: yes | sdkmanager --licenses || true
 
-      - name: Install Root & App Dependencies
+      - name: Install Dependencies
         run: |
-          if [ -f package.json ]; then npm install --legacy-peer-deps; fi
-          if [ -d app ] && [ -f app/package.json ]; then cd app && npm install --legacy-peer-deps && cd ..; fi
+          npm ci || npm install
+          if [ -d "app" ]; then cd app && (npm ci || npm install) && cd ..; fi
 
       - name: Build Web Assets
         run: |
-          if [ -f package.json ]; then npm run build --if-present; fi
-          if [ -d app ] && [ -f app/package.json ]; then cd app && npm run build --if-present && cd ..; fi
+          npm run build --if-present
+          if [ -d "app" ]; then cd app && npm run build --if-present && cd ..; fi
 
       - name: Sync Capacitor Android
-        run: |
-          npx cap sync android || (cd app && npx cap sync android)
+        run: npx cap sync android
 
-      - name: Ensure Executable Permissions on Gradle Wrapper
+      - name: Grant Execute Permission to Gradle Wrapper
         run: |
           find . -name "gradlew" -exec chmod +x {} +
 
-      - name: Build Android Debug APK
+      - name: Build Release APK with Gradle
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=512m -XX:+HeapDumpOnOutOfMemoryError"
         run: |
-          export GRADLE_OPTS="-Xmx4096m -Dorg.gradle.daemon=false"
-          if [ -f android/gradlew ]; then
-            cd android && ./gradlew assembleDebug --stacktrace
-          elif [ -f app/android/gradlew ]; then
-            cd app/android && ./gradlew assembleDebug --stacktrace
-          else
-            ./gradlew assembleDebug --stacktrace
-          fi
+          cd app/android || cd android
+          ./gradlew assembleRelease -Pandroid.injected.testOnly=false --no-daemon
 
-      - name: Locate and Stage APK
+      - name: Generate Signing Keystore
         run: |
-          mkdir -p output-apk
-          find . -type f -name "*debug.apk" -exec cp {} output-apk/mokhtas-hifd-saha.apk \;
-          ls -la output-apk/
+          keytool -genkeypair -v -keystore release.keystore -alias app-alias -keyalg RSA -keysize 2048 -validity 10000 -storepass 123456 -keypass 123456 -dname "CN=HSP, OU=App, O=HSP, L=Algiers, S=Algiers, C=DZ"
 
-      - name: Upload APK Artifact
+      - name: Sign Release APK
+        run: |
+          mkdir -p output_apk
+          RAW_APK=$(find . -name "*release-unsigned.apk" -o -name "*release.apk" | head -n 1)
+          $ANDROID_HOME/build-tools/34.0.0/apksigner sign --ks release.keystore --ks-pass pass:123456 --key-pass pass:123456 --out output_apk/mokhtas-hifd-saha.apk "$RAW_APK"
+
+      - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: mokhtas-hifd-saha-apk
-          path: output-apk/mokhtas-hifd-saha.apk
-          retention-days: 14
+          name: mokhtas-hifd-saha-release
+          path: output_apk/mokhtas-hifd-saha.apk
+          retention-days: 7
